@@ -3,6 +3,9 @@ import requests
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 
+import math
+from typing import Dict, Any, List, Optional
+
 load_dotenv()
 app = FastAPI()
 
@@ -14,6 +17,27 @@ if not CLIENT_ID or not CLIENT_SECRET or not REFRESH_TOKEN:
     # Don’t crash at import-time on Render; just make it obvious in the endpoint errors.
     pass
 
+def strava_get(path: str, token: str, params: Optional[dict] = None) -> Any:
+    r = requests.get(
+        f"https://www.strava.com/api/v3{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        params=params or {},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+def get_activity(activity_id: int) -> Dict[str, Any]:
+    token = get_access_token()
+    return strava_get(f"/activities/{activity_id}", token)
+
+def get_streams(activity_id: int, keys: str) -> Dict[str, Any]:
+    token = get_access_token()
+    return strava_get(
+        f"/activities/{activity_id}/streams",
+        token,
+        params={"keys": keys, "key_by_type": "true"},
+    )
 
 def get_access_token() -> str:
     r = requests.post(
@@ -67,3 +91,37 @@ def recent_activities(per_page: int = 10):
         }
         for a in activities
     ]
+
+@app.get("/bike-streams")
+def bike_streams(activity_id: int):
+    streams = get_streams(
+        activity_id,
+        keys="time,distance,watts,heartrate,altitude,cadence,velocity_smooth"
+    )
+    return streams
+
+
+@app.get("/run-splits")
+def run_splits(activity_id: int):
+    act = get_activity(activity_id)
+
+    if act.get("splits_standard"):
+        return {
+            "source": "strava_splits_standard",
+            "unit": "mile",
+            "splits": act["splits_standard"]
+        }
+
+    if act.get("splits_metric"):
+        return {
+            "source": "strava_splits_metric",
+            "unit": "km",
+            "splits": act["splits_metric"]
+        }
+
+    streams = get_streams(
+        activity_id,
+        keys="time,distance,heartrate,altitude"
+    )
+
+    return streams
